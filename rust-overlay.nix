@@ -148,33 +148,26 @@ let
           installPhase = ''
             patchShebangs install.sh
             CFG_DISABLE_LDCONFIG=1 ./install.sh --prefix=$out --verbose
-
             setInterpreter() {
               local dir="$1"
               [ -e "$dir" ] || return 0
-
               header "Patching interpreter of ELF executables and libraries in $dir"
               local i
+              local target
               while IFS= read -r -d ''$'\0' i; do
                 if [[ "$i" =~ .build-id ]]; then continue; fi
                 if ! isELF "$i"; then continue; fi
+                if [ "$(basename "$(dirname "$i")")" != "bin" ]; then continue; fi
                 echo "setting interpreter of $i"
-                
-                if [[ -x "$i" ]]; then
-                  # Handle executables
-                  patchelf \
-                    --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" \
-                    --set-rpath "${super.lib.makeLibraryPath [ self.zlib ]}:$out/lib" \
-                    "$i" || true
-                else
-                  # Handle libraries
-                  patchelf \
-                    --set-rpath "${super.lib.makeLibraryPath [ self.zlib ]}:$out/lib" \
-                    "$i" || true
-                fi
+                target="$(dirname "$i")/__$(basename "$i").unpatched"
+                mv "$i" "$target"
+                cat > "$i" <<EOF
+            #!${self.bash}/bin/bash
+            RUSTFLAGS=''${CARGO_BUILD_RUSTFLAGS:-"--sysroot=$out"} exec "${stdenv.glibc}/lib/ld-linux-x86-64.so.2" "$target" "\$@"
+            EOF
+                chmod +x $i
               done < <(find "$dir" -type f -print0)
             }
-
             setInterpreter $out
           '';
 
